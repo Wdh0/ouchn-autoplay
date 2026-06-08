@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         国开学习网自动连播 v15.2
+// @name         国开学习网自动连播 v1.2
 // @namespace    https://github.com/ouchn-autoplay
 // @version      1.2.0
 // @description  国开学习网全屏活动页自动连播。启发于国开学习的不便，经长期试用推出正式版。
