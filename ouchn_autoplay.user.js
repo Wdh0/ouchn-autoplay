@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         国开学习网自动连播 v15.2
 // @namespace    https://github.com/ouchn-autoplay
-// @version      1.1.0
+// @version      1.2.0
 // @description  国开学习网全屏活动页自动连播。启发于国开学习的不便，经长期试用推出正式版。
 // @match        https://*.ouchn.cn/*
 // @grant        unsafeWindow
@@ -221,24 +221,21 @@
 
   function classifyActivity(act) {
     if (!act) return "unknown";
-    const t = act.type || "";
+    var t = act.type || "";
     if (/exam/.test(t)) return "exam";
     if (t === "homework") return "homework";
     if (t === "questionnaire") return "questionnaire";
     if (t === "forum") return "forum";
-    if (t === "online_video" || t === "lesson") return "media";
-    if (t === "page" || t === "material") return "view";
-    if (t === "tencent_meeting" || t === "live") return "meeting";
-    const ck = act.completion_criterion_key || "";
-    if (ck === "submit" || ck === "post") return "manual";
-    if (ck === "view" || ck === "completeness") return "media";
+    if (t === "online_video" || t === "lesson" || t === "slide") return "media";
+    if (t === "page" || t === "material" || t === "scorm") return "view";
+    // web_link, chatroom, interaction, virtual_classroom 等不自动播放
     return "unknown";
   }
 
-  function isManual(act) {
-    const c = classifyActivity(act);
-    if (["exam", "homework", "questionnaire", "forum", "meeting", "manual"].includes(c)) return true;
-    return /形考|终考|考试|答题|测验|作业|问卷|讨论/.test((act?.title || "").toLowerCase());
+  // 白名单：只有这些类型自动播放，其余全部跳过
+  function isAutoPlayable(act) {
+    var c = classifyActivity(act);
+    return c === "media" || c === "view";
   }
 
   function isViewOnly(act) {
@@ -842,16 +839,42 @@
       advancing = false;
       return;
     }
+    // 防护：非正常活动ID不导航
+    // 防护：非正常活动不导航
+    if (!next.type || !next.id || /course|module|syllabus|back|return/i.test(next.type || "")) {
+      advancing = false;
+      return;
+    }
 
-    // 手动活动向前跳过，直到找到非手动活动
-    while (next && isManual(next)) {
+    // 跳过不可自动播放的活动
+    while (next && !isAutoPlayable(next)) {
       var nextIdx = acts.findIndex(function (a) { return a.id === next.id; });
       if (nextIdx >= 0 && nextIdx < acts.length - 1) {
         next = acts[nextIdx + 1];
+      } else if (nextIdx === -1) {
+        break;
       } else {
-        status("全是手动活动", "#ff0");
-        advancing = false;
-        return;
+        // 当前模块最后一个不可播 → 尝试展开折叠目录
+        var subMenus = document.querySelectorAll(".full-screen-mode-sidebar-sub-menu");
+        var toClick = null;
+        for (var sm = 0; sm < subMenus.length; sm++) {
+          var hasInner = subMenus[sm].querySelector(".full-screen-mode-sidebar-sub-menu-inner");
+          if (!hasInner && subMenus[sm].offsetParent !== null) {
+            var title = subMenus[sm].querySelector(".full-screen-mode-sidebar-sub-menu-title");
+            if (title) { toClick = title; break; }
+          }
+        }
+        if (toClick) {
+          try { toClick.click(); } catch (e) {}
+          setTimeout(function () {
+            if (!paused && !breakActive) doAdvance();
+          }, 2000);
+          advancing = false;
+          status("展开目录中...", "#ff0");
+          return;
+        }
+        // 无折叠目录可展开 → 直接导航过去，让 checkCurrentActivity 的 skip 循环处理
+        break;
       }
     }
 
@@ -889,8 +912,8 @@
         if (!paused && !breakActive) {
           if (shouldTakeBreak()) {
             startBreak();
-          } else if (!handleReferenceActivity()) {
-            startViewOnlyTimer();
+          } else {
+            checkCurrentActivity();
           }
         }
       }, rand(1500, 3000));
@@ -902,11 +925,19 @@
     const scope = getScope();
     if (!scope?.currentActivity || paused) return;
     const act = scope.currentActivity;
-    var cat = classifyActivity(act);
     log("当前: " + act.id + " " + classifyActivity(act) + " " + act.title);
 
-    if (isManual(act)) {
-      setTimeout(function () { if (!paused && !breakActive && !advancing) doAdvance(); }, rand(800, 2000));
+    if (!isAutoPlayable(act)) {
+      (function skipLoop() {
+        if (paused || breakActive) {
+          setTimeout(skipLoop, rand(5000, 7000));
+          return;
+        }
+        var s2 = getScope();
+        if (!s2?.currentActivity || isAutoPlayable(s2.currentActivity)) return;
+        if (!advancing) doAdvance();
+        setTimeout(skipLoop, rand(5000, 7000));
+      })();
       return;
     }
     if (isViewOnly(act)) {
